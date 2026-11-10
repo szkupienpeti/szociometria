@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Szociometria</title>
+<style>
+  :root { --fg:#1f2733; --muted:#667085; --line:#d9dee7; --bg:#f5f6f8; --card:#fff;
+          --accent:#2f6fde; --accent-bg:#e7f0ff; --warn:#b25e00; --warn-bg:#fff3d6; --mutual:#d6336c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui, "Segoe UI", sans-serif; color:var(--fg); background:var(--bg); }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px 0; }
+  .top { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .top h1 { font-size:18px; margin:0; }
+  .top input { flex:1; min-width:180px; max-width:420px; }
+  nav { display:flex; gap:2px; margin-top:8px; flex-wrap:wrap; }
+  nav button { border:0; background:none; padding:8px 14px; border-bottom:3px solid transparent; border-radius:0; color:var(--muted); }
+  nav button.on { color:var(--accent); border-color:var(--accent); font-weight:600; }
+  main { padding:16px; max-width:1200px; margin:0 auto; }
+  h2 { font-size:17px; margin:0 0 10px; }
+  input, select, textarea, button { font:inherit; color:inherit; }
+  input, select, textarea { border:1px solid var(--line); border-radius:6px; padding:6px 8px; background:#fff; }
+  textarea { width:100%; }
+  button { border:1px solid var(--line); background:#fff; border-radius:6px; padding:6px 12px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:#b42318; }
+  button.x { border:0; background:none; color:var(--muted); padding:4px 8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .hint { color:var(--muted); }
+  .warn { color:var(--warn); background:var(--warn-bg); border-radius:6px; padding:2px 8px; display:inline-block; }
+  .badge { background:#eef0f4; border-radius:20px; padding:1px 9px; font-size:12px; color:var(--muted); }
+  table { border-collapse:collapse; }
+  .list td { padding:3px 6px 3px 0; }
+  .list input[type=text] { width:100%; }
+  .split { display:grid; grid-template-columns:230px 1fr; gap:14px; align-items:start; }
+  @media (max-width:700px) { .split { grid-template-columns:1fr; } }
+  .childlist { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:6px; max-height:80vh; overflow:auto; }
+  .childlist button { display:flex; justify-content:space-between; width:100%; border:0; text-align:left; padding:5px 8px; }
+  .childlist button.on { background:var(--accent-bg); font-weight:600; }
+  .st-ok { color:#18794e; } .st-warn { color:var(--warn); } .st-none { color:#b0b7c3; }
+  .chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+  .chip { border-radius:20px; padding:3px 11px; font-size:14px; }
+  .chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .chip.self { border-style:dashed; color:var(--muted); }
+  .chip.self.on { color:#fff; }
+  .qhead { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; margin-bottom:8px; }
+  .qhead b { font-size:16px; }
+  .tally td { padding:3px 10px 3px 0; }
+  .bar { height:14px; background:var(--accent); border-radius:3px; min-width:1px; }
+  .matrix { font-size:13px; }
+  .matrix th, .matrix td { border:1px solid var(--line); padding:2px 5px; text-align:center; min-width:24px; }
+  .matrix th.v { writing-mode:vertical-rl; transform:rotate(180deg); text-align:left; padding:6px 2px; white-space:nowrap; font-weight:500; }
+  .matrix th.r { text-align:left; white-space:nowrap; font-weight:500; }
+  .matrix td.d { background:#eceef2; }
+  .matrix td.c { background:var(--accent-bg); }
+  .matrix td.m { background:#ffd9e6; font-weight:700; }
+  .matrix .sum td, .matrix .sum th, .matrix .s { background:#f3f4f7; font-weight:700; }
+  .scroll { overflow:auto; }
+  svg.graph { width:100%; height:auto; background:#fff; border:1px solid var(--line); border-radius:10px; touch-action:none; user-select:none; }
+  svg.graph g.node { cursor:grab; }
+  @media print { header, .noprint { display:none !important; } body { background:#fff; } .card { border:0; padding:0; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <h1>Szociometria</h1>
+    <input id="title" placeholder="Felmérés címe (pl. 5.b – 2026 ősz)">
+  </div>
+  <nav id="nav"></nav>
+</header>
+<main id="main"></main>
+
+<script>
+'use strict';
+const KEY = 'szociometria-v1';
+const TABS = [['children', 'Névsor'], ['questions', 'Kérdések'], ['answers', 'Válaszok'], ['results', 'Eredmények'], ['data', 'Adatok']];
+const coll = new Intl.Collator('hu');
+const UI = { tab: 'children', child: null, q: null, view: 'tally' };
+const layouts = {}; // kérdés id -> { sig, P }
+
+/* ---------- adatmodell ---------- */
+function blank() { return { version: 1, title: '', children: [], questions: [], answers: {} }; }
+
+function normalize(d) {
+  if (!d || typeof d !== 'object' || !Array.isArray(d.children) || !Array.isArray(d.questions))
+    throw new Error('A fájlban nincs "children" és "questions" lista.');
+  const s = blank();
+  s.title = String(d.title || '');
+  const cids = new Set(), qids = new Set();
+  for (const c of d.children) {
+    const id = Number(c.id);
+    if (!Number.isInteger(id) || cids.has(id)) throw new Error('Hibás vagy ismétlődő gyerek-azonosító: ' + c.id);
+    cids.add(id); s.children.push({ id, name: String(c.name || '') });
+  }
+  for (const q of d.questions) {
+    const id = Number(q.id);
+    if (!Number.isInteger(id) || qids.has(id)) throw new Error('Hibás vagy ismétlődő kérdés-azonosító: ' + q.id);
+    qids.add(id);
+    s.questions.push({ id, text: String(q.text || ''), category: String(q.category || ''), count: Math.max(1, parseInt(q.count) || 1) });
+  }
+  for (const [cid, per] of Object.entries(d.answers || {})) {
+    if (!cids.has(+cid) || !per || typeof per !== 'object') continue;
+    for (const [qid, list] of Object.entries(per)) {
+      if (!qids.has(+qid) || !Array.isArray(list)) continue;
+      const l = [...new Set(list.map(Number).filter(x => cids.has(x)))];
+      if (l.length) (s.answers[cid] ??= {})[qid] = l;
+    }
+  }
+  return s;
+}
+
+function load() {
+  try { const raw = localStorage.getItem(KEY); if (raw) return normalize(JSON.parse(raw)); } catch (e) { console.warn(e); }
+  return blank();
+}
+let S = load();
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { console.warn(e); } }
+
+const newId = list => list.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+const kids = () => [...S.children].sort((a, b) => coll.compare(a.name, b.name));
+const nameOf = id => S.children.find(c => c.id === id)?.name ?? '?';
+const ans = (cid, qid) => S.answers[cid]?.[qid] ?? [];
+function setAns(cid, qid, list) {
+  if (list.length) (S.answers[cid] ??= {})[qid] = list;
+  else if (S.answers[cid]) { delete S.answers[cid][qid]; if (!Object.keys(S.answers[cid]).length) delete S.answers[cid]; }
+  save();
+}
+function warnings(cid, q) {
+  const a = ans(cid, q.id), w = [];
+  if (a.length < q.count) w.push(`hiányos: ${a.length}/${q.count}`);
+  if (a.length > q.count) w.push(`több a kértnél: ${a.length}/${q.count}`);
+  if (a.includes(cid)) w.push('önmagát választotta');
+  return w;
+}
+function status(cid) {
+  if (!S.answers[cid]) return 'none';
+  return S.questions.some(q => warnings(cid, q).length) ? 'warn' : 'ok';
+}
+const plain = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const matches = (name, f) => !f || plain(name).split(/\s+/).some(w => w.startsWith(f)) || plain(name).startsWith(f);
+
+/* ---------- DOM segéd ---------- */
+function h(tag, attrs = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (k === 'class') e.className = v;
+    else if (v === true) e.setAttribute(k, '');
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  e.append(...children.flat().filter(x => x != null && x !== false));
+  return e;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function download(name, blob) {
+  const a = h('a', { href: URL.createObjectURL(blob), download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const slug = s => plain(s).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const fileBase = extra => ['szociometria', slug(S.title), extra].filter(Boolean).join('-');
+
+/* ---------- keret ---------- */
+const VIEWS = { children: viewChildren, questions: viewQuestions, answers: viewAnswers, results: viewResults, data: viewData };
+function render() {
+  document.getElementById('nav').replaceChildren(...TABS.map(([id, label]) =>
+    h('button', { class: UI.tab === id ? 'on' : '', onclick: () => { UI.tab = id; render(); } }, label)));
+  document.getElementById('main').replaceChildren(VIEWS[UI.tab]());
+}
+const titleInput = document.getElementById('title');
+titleInput.value = S.title;
+titleInput.addEventListener('input', () => { S.title = titleInput.value; save(); });
+
+/* ---------- névsor ---------- */
+function viewChildren() {
+  const ta = h('textarea', { rows: 5, placeholder: 'Soronként egy név – egyszerre az egész névsor beilleszthető' });
+  const add = () => {
+    for (const n of ta.value.split('\n').map(s => s.trim()).filter(Boolean)) S.children.push({ id: newId(S.children), name: n });
+    save(); render();
+  };
+  const rows = kids().map((c, i) => h('tr', {},
+    h('td', { class: 'hint' }, `${i + 1}.`),
+    h('td', {}, h('input', { type: 'text', value: c.name, size: 30, onchange: e => { c.name = e.target.value.trim() || c.name; save(); render(); } })),
+    h('td', {}, h('button', { class: 'x', title: 'Törlés', onclick: () => {
+      if (!confirm(`Törlöd őt: ${c.name}? A válaszai és a rá adott jelölések is törlődnek.`)) return;
+      S.children = S.children.filter(x => x !== c);
+      delete S.answers[c.id];
+      for (const cid of Object.keys(S.answers)) for (const qid of Object.keys(S.answers[cid]))
+        setAns(cid, qid, S.answers[cid][qid].filter(x => x !== c.id));
+      save(); render();
+    } }, '✕'))));
+  return h('div', {},
+    h('div', { class: 'card' }, h('h2', {}, 'Új nevek'), ta, h('div', { class: 'row', style: 'margin-top:8px' }, h('button', { class: 'primary', onclick: add }, 'Hozzáadás'))),
+    h('div', { class: 'card' }, h('h2', {}, `Névsor (${S.children.length} fő)`),
+      rows.length ? h('table', { class: 'list' }, rows) : h('p', { class: 'hint' }, 'Még üres.')));
+}
+
+/* ---------- kérdések ---------- */
+function viewQuestions() {
+  const cats = [...new Set(S.questions.map(q => q.category).filter(Boolean))];
+  const rows = S.questions.map((q, i) => h('tr', {},
+    h('td', { class: 'hint' }, `${i + 1}.`),
+    h('td', { style: 'width:55%' }, h('input', { type: 'text', value: q.text, placeholder: 'Kérdés szövege', onchange: e => { q.text = e.target.value; save(); } })),
+    h('td', {}, h('input', { type: 'text', value: q.category, placeholder: 'Kategória', list: 'cats', onchange: e => { q.category = e.target.value.trim(); save(); render(); } })),
+    h('td', {}, h('input', { type: 'number', min: 1, value: q.count, style: 'width:64px', title: 'Választandó személyek száma', onchange: e => { q.count = Math.max(1, parseInt(e.target.value) || 1); save(); render(); } })),
+    h('td', {}, h('button', { class: 'x', title: 'Törlés', onclick: () => {
+      if (!confirm('Törlöd a kérdést a hozzá tartozó válaszokkal együtt?')) return;
+      S.questions = S.questions.filter(x => x !== q);
+      for (const cid of Object.keys(S.answers)) setAns(cid, q.id, []);
+      save(); render();
+    } }, '✕'))));
+  return h('div', { class: 'card' },
+    h('h2', {}, 'Kérdések'),
+    h('datalist', { id: 'cats' }, cats.map(c => h('option', { value: c }))),
+    rows.length ? h('table', { class: 'list', style: 'width:100%' },
+      h('tr', { class: 'hint' }, h('td'), h('td', {}, 'Kérdés'), h('td', {}, 'Kategória'), h('td', {}, 'Hány főt?'), h('td')), rows)
+      : h('p', { class: 'hint' }, 'Még nincs kérdés.'),
+    h('div', { class: 'row', style: 'margin-top:10px' }, h('button', { class: 'primary', onclick: () => {
+      S.questions.push({ id: newId(S.questions), text: '', category: '', count: 3 }); save(); render();
+      document.querySelector('.list tr:last-child input')?.focus();
+    } }, '+ Új kérdés')));
+}
+
+/* ---------- válaszok ---------- */
+function viewAnswers() {
+  const ks = kids();
+  if (!ks.length || !S.questions.length) return h('p', { class: 'hint' }, 'Előbb vedd fel a névsort és legalább egy kérdést.');
+  if (!ks.some(c => c.id === UI.child)) UI.child = ks[0].id;
+  const cid = UI.child, idx = ks.findIndex(c => c.id === cid);
+  const go = d => { UI.child = ks[(idx + d + ks.length) % ks.length].id; render(); window.scrollTo(0, 0); };
+  const list = h('div', { class: 'childlist' });
+  const fillList = () => {
+    const ICON = { ok: '✓', warn: '⚠', none: '–' }, TIP = { ok: 'Kész', warn: 'Figyelmeztetés van', none: 'Nincs válasz' };
+    list.replaceChildren(...ks.map(c => { const st = status(c.id);
+      return h('button', { class: c.id === cid ? 'on' : '', onclick: () => { UI.child = c.id; render(); } },
+        h('span', {}, c.name), h('span', { class: 'st-' + st, title: TIP[st] }, ICON[st])); }));
+  };
+  fillList();
+  const done = ks.filter(c => status(c.id) !== 'none').length;
+  return h('div', { class: 'split' },
+    h('div', {}, h('p', { class: 'hint', style: 'margin:0 0 6px' }, `Kitöltve: ${done}/${ks.length}`), list),
+    h('div', {},
+      h('div', { class: 'row', style: 'margin-bottom:10px' },
+        h('h2', { style: 'margin:0;flex:1' }, nameOf(cid) + ' válaszai'),
+        h('button', { onclick: () => go(-1) }, '← Előző'), h('button', { class: 'primary', onclick: () => go(1) }, 'Következő →')),
+      S.questions.map(q => answerCard(cid, q, ks, fillList))));
+}
+
+function answerCard(cid, q, ks, onChange) {
+  const el = h('section', { class: 'card' });
+  let filter = '';
+  const chipBox = h('div', { class: 'chips' });
+  const input = h('input', { type: 'text', placeholder: 'Név kezdete + Enter, vagy kattints a nevekre', style: 'width:100%;max-width:380px' });
+  const head = h('div', { class: 'qhead' });
+  const toggle = id => {
+    const a = ans(cid, q.id);
+    setAns(cid, q.id, a.includes(id) ? a.filter(x => x !== id) : [...a, id]);
+    filter = ''; input.value = ''; draw(); onChange();
+  };
+  const drawChips = () => {
+    const a = ans(cid, q.id);
+    chipBox.replaceChildren(...ks.filter(c => matches(c.name, filter) || a.includes(c.id)).map(c => {
+      const i = a.indexOf(c.id);
+      return h('button', { class: 'chip' + (i >= 0 ? ' on' : '') + (c.id === cid ? ' self' : ''), onclick: () => toggle(c.id) }, (i >= 0 ? `${i + 1}. ` : '') + c.name);
+    }));
+  };
+  const draw = () => {
+    head.replaceChildren(h('b', {}, q.text || '(névtelen kérdés)'), q.category && h('span', { class: 'badge' }, q.category),
+      h('span', { class: 'hint' }, `${ans(cid, q.id).length}/${q.count} fő`),
+      ...warnings(cid, q).map(w => h('span', { class: 'warn' }, '⚠ ' + w)));
+    drawChips();
+  };
+  input.addEventListener('input', () => { filter = plain(input.value.trim()); drawChips(); });
+  input.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || !filter) return;
+    const a = ans(cid, q.id);
+    const hit = ks.find(c => matches(c.name, filter) && !a.includes(c.id)) ?? ks.find(c => matches(c.name, filter));
+    if (hit) toggle(hit.id);
+  });
+  draw();
+  el.append(head, input, chipBox);
+  return el;
+}
+
+/* ---------- eredmények ---------- */
+function viewResults() {
+  if (!S.children.length || !S.questions.length) return h('p', { class: 'hint' }, 'Előbb vedd fel a névsort és legalább egy kérdést.');
+  if (!S.questions.some(q => q.id === UI.q)) UI.q = S.questions[0].id;
+  const q = S.questions.find(x => x.id === UI.q), ks = kids();
+  const sel = h('select', { onchange: e => { UI.q = +e.target.value; render(); } },
+    S.questions.map(x => h('option', { value: x.id, selected: x.id === q.id }, (x.category ? `[${x.category}] ` : '') + (x.text || '(névtelen kérdés)'))));
+  const views = [['tally', 'Strigulás'], ['matrix', 'Mátrix'], ['graph', 'Szociogram']];
+  const silent = ks.filter(c => !ans(c.id, q.id).length);
+  const got = Object.fromEntries(ks.map(c => [c.id, 0]));
+  for (const c of ks) for (const t of ans(c.id, q.id)) if (t !== c.id && t in got) got[t]++;
+  const body = { tally: resTally, matrix: resMatrix, graph: resGraph }[UI.view](q, ks, got);
+  return h('div', {},
+    h('div', { class: 'row noprint', style: 'margin-bottom:12px' }, sel,
+      views.map(([id, label]) => h('button', { class: UI.view === id ? 'primary' : '', onclick: () => { UI.view = id; render(); } }, label))),
+    h('div', { class: 'card' },
+      h('h2', {}, q.text || '(névtelen kérdés)', q.category ? h('span', { class: 'badge', style: 'margin-left:8px' }, q.category) : null),
+      silent.length ? h('p', {}, h('span', { class: 'warn' }, `⚠ Nem válaszolt (${silent.length}): ` + silent.map(c => c.name).join(', '))) : null,
+      body));
+}
+
+function resTally(q, ks, got) {
+  const max = Math.max(1, ...Object.values(got));
+  const rows = [...ks].sort((a, b) => got[b.id] - got[a.id] || coll.compare(a.name, b.name));
+  return h('table', { class: 'tally', style: 'width:100%;max-width:640px' }, rows.map(c => h('tr', {},
+    h('td', { style: 'white-space:nowrap' }, c.name), h('td', { style: 'text-align:right;font-weight:700' }, got[c.id]),
+    h('td', { style: 'width:70%' }, h('div', { class: 'bar', style: `width:${got[c.id] / max * 100}%` })))));
+}
+
+function resMatrix(q, ks, got) {
+  const head = h('tr', {}, h('th', { class: 'r hint' }, 'ki ↓ / kit →'), ks.map(c => h('th', { class: 'v' }, c.name)), h('th', { class: 'v s' }, 'adott'));
+  const rows = ks.map(r => { const a = ans(r.id, q.id);
+    return h('tr', {}, h('th', { class: 'r' }, r.name), ks.map(c => {
+      const i = a.indexOf(c.id), mutual = i >= 0 && r.id !== c.id && ans(c.id, q.id).includes(r.id);
+      return h('td', { class: mutual ? 'm' : i >= 0 ? 'c' : r.id === c.id ? 'd' : '' }, i >= 0 ? i + 1 : '');
+    }), h('td', { class: 's' }, a.length)); });
+  const sum = h('tr', { class: 'sum' }, h('th', { class: 'r' }, 'kapott'), ks.map(c => h('td', {}, got[c.id])), h('td'));
+  return h('div', {},
+    h('p', { class: 'hint' }, 'A szám a választás sorrendje. Rózsaszín: kölcsönös választás.'),
+    h('div', { class: 'scroll' }, h('table', { class: 'matrix' }, head, rows, sum)));
+}
+
+/* ---------- szociogram ---------- */
+const W = 1000, H = 700;
+function computeLayout(ids, pairs) {
+  const n = ids.length, P = {};
+  ids.forEach((id, i) => { const a = 2 * Math.PI * i / n; P[id] = { x: W / 2 + W * .35 * Math.cos(a), y: H / 2 + H * .35 * Math.sin(a) }; });
+  const k = Math.sqrt(W * H / Math.max(n, 1)) * .75;
+  let t = W / 8;
+  for (let it = 0; it < 500; it++, t *= .99) {
+    const D = Object.fromEntries(ids.map(id => [id, { x: 0, y: 0 }]));
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      const a = P[ids[i]], b = P[ids[j]]; let dx = a.x - b.x, dy = a.y - b.y; const d = Math.hypot(dx, dy) || .01, f = k * k / d / d;
+      dx *= f; dy *= f; D[ids[i]].x += dx; D[ids[i]].y += dy; D[ids[j]].x -= dx; D[ids[j]].y -= dy;
+    }
+    for (const [u, v, w] of pairs) {
+      const a = P[u], b = P[v]; let dx = a.x - b.x, dy = a.y - b.y; const d = Math.hypot(dx, dy) || .01, f = d / k * w;
+      dx *= f; dy *= f; D[u].x -= dx; D[u].y -= dy; D[v].x += dx; D[v].y += dy;
+    }
+    for (const id of ids) {
+      const p = P[id], d = D[id];
+      d.x += (W / 2 - p.x) * .04 * n; d.y += (H / 2 - p.y) * .04 * n * (W / H);
+      const m = Math.hypot(d.x, d.y) || .01, s = Math.min(m, t) / m;
+      p.x = Math.min(W - 60, Math.max(60, p.x + d.x * s)); p.y = Math.min(H - 50, Math.max(35, p.y + d.y * s));
+    }
+  }
+  return P;
+}
+
+function graphEdges(q, ks) {
+  const ids = new Set(ks.map(c => c.id)), edges = [];
+  for (const c of ks) for (const t of ans(c.id, q.id)) {
+    if (t === c.id || !ids.has(t)) continue;
+    const mutual = ans(t, q.id).includes(c.id);
+    if (mutual && t < c.id) continue; // a kölcsönös élt egyszer rajzoljuk
+    edges.push([c.id, t, mutual]);
+  }
+  return edges;
+}
+
+function resGraph(q, ks, got) {
+  const edges = graphEdges(q, ks), ids = ks.map(c => c.id);
+  const sig = JSON.stringify([ids, edges]);
+  if (layouts[q.id]?.sig !== sig) layouts[q.id] = { sig, P: computeLayout(ids, edges.map(([u, v, m]) => [u, v, m ? 2 : 1])) };
+  const P = layouts[q.id].P;
+  const r = id => 11 + 6 * Math.sqrt(got[id]);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class', 'graph'); svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  const font = 'font-family="Segoe UI, system-ui, sans-serif"';
+  const draw = () => {
+    const marker = (id, color) => `<marker id="${id}" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${color}"/></marker>`;
+    let s = `<defs>${marker('a1', '#7b8698')}${marker('a2', '#d6336c')}</defs><rect width="${W}" height="${H}" fill="#fff"/>`;
+    for (const [u, v, m] of edges) {
+      const a = P[u], b = P[v], d = Math.hypot(b.x - a.x, b.y - a.y) || 1, ux = (b.x - a.x) / d, uy = (b.y - a.y) / d;
+      const x1 = a.x + ux * (r(u) + 2), y1 = a.y + uy * (r(u) + 2), x2 = b.x - ux * (r(v) + 2), y2 = b.y - uy * (r(v) + 2);
+      s += m ? `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#d6336c" stroke-width="2.6" marker-start="url(#a2)" marker-end="url(#a2)"/>`
+             : `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#7b8698" stroke-width="1.3" marker-end="url(#a1)"/>`;
+    }
+    for (const c of ks) {
+      const p = P[c.id], rr = r(c.id);
+      s += `<g class="node" data-id="${c.id}"><circle cx="${p.x}" cy="${p.y}" r="${rr}" fill="${got[c.id] ? '#2f6fde' : '#aab2c0'}" stroke="#fff" stroke-width="2"/>` +
+        `<text x="${p.x}" y="${p.y + 4.5}" text-anchor="middle" font-size="13" font-weight="700" fill="#fff" ${font}>${got[c.id]}</text>` +
+        `<text x="${p.x}" y="${p.y + rr + 14}" text-anchor="middle" font-size="13" fill="#1f2733" stroke="#fff" stroke-width="3.5" paint-order="stroke" ${font}>${esc(c.name)}</text></g>`;
+    }
+    svg.innerHTML = s;
+  };
+  draw();
+  let drag = null;
+  const pt = e => { const m = svg.getScreenCTM().inverse(); return new DOMPoint(e.clientX, e.clientY).matrixTransform(m); };
+  svg.addEventListener('pointerdown', e => {
+    const g = e.target.closest('g.node'); if (!g) return;
+    const id = +g.dataset.id, p = pt(e); drag = { id, dx: P[id].x - p.x, dy: P[id].y - p.y }; svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener('pointermove', e => {
+    if (!drag) return; const p = pt(e);
+    P[drag.id].x = Math.min(W - 10, Math.max(10, p.x + drag.dx)); P[drag.id].y = Math.min(H - 10, Math.max(10, p.y + drag.dy)); draw();
+  });
+  svg.addEventListener('pointerup', () => { drag = null; });
+  svg.addEventListener('pointercancel', () => { drag = null; });
+
+  const svgText = () => new XMLSerializer().serializeToString(svg);
+  const name = ext => fileBase(slug(q.text).slice(0, 30) || 'kerdes' + q.id) + ext;
+  const savePng = () => {
+    const img = new Image();
+    img.onload = () => {
+      const c = h('canvas', { width: W * 2, height: H * 2 });
+      c.getContext('2d').drawImage(img, 0, 0, W * 2, H * 2);
+      c.toBlob(b => download(name('.png'), b));
+    };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgText().replace('<svg ', `<svg width="${W}" height="${H}" `));
+  };
+  return h('div', {},
+    h('div', { class: 'row noprint', style: 'margin-bottom:8px' },
+      h('button', { onclick: () => { delete layouts[q.id]; render(); } }, 'Újrarendezés'),
+      h('button', { onclick: savePng }, 'Letöltés PNG'),
+      h('button', { onclick: () => download(name('.svg'), new Blob([svgText()], { type: 'image/svg+xml' })) }, 'Letöltés SVG'),
+      h('span', { class: 'hint' }, 'A csúcsok húzhatók. Szám és méret: kapott jelölések. ',
+        h('span', { style: 'color:var(--mutual);font-weight:700' }, '↔ kölcsönös'), ' · → egyoldalú')),
+    svg);
+}
+
+/* ---------- adatok ---------- */
+function viewData() {
+  const hasData = S.children.length || S.questions.length;
+  const file = h('input', { type: 'file', accept: '.json,application/json', onchange: async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const d = normalize(JSON.parse(await f.text()));
+      if (hasData && !confirm('A betöltés felülírja a mostani adatokat. Folytatod?')) { e.target.value = ''; return; }
+      replaceAll(d);
+    } catch (err) { alert('Nem sikerült betölteni: ' + err.message); e.target.value = ''; }
+  } });
+  const nAns = Object.keys(S.answers).length;
+  return h('div', {},
+    h('div', { class: 'card' }, h('h2', {}, 'Mentés fájlba'),
+      h('p', { class: 'hint' }, `${S.children.length} gyerek, ${S.questions.length} kérdés, ${nAns} kitöltött válaszlap.`),
+      h('button', { class: 'primary', onclick: () => download(fileBase(new Date().toISOString().slice(0, 10)) + '.json',
+        new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' })) }, 'Exportálás (JSON)')),
+    h('div', { class: 'card' }, h('h2', {}, 'Betöltés fájlból'), file),
+    h('div', { class: 'card' }, h('h2', {}, 'Egyéb'),
+      h('div', { class: 'row' },
+        h('button', { onclick: () => { if (!hasData || confirm('A példaadatok felülírják a mostani adatokat. Folytatod?')) replaceAll(demo()); } }, 'Példaadatok betöltése'),
+        h('button', { class: 'danger', onclick: () => { if (confirm('Biztosan törölsz minden adatot? Ez nem vonható vissza.')) replaceAll(blank()); } }, 'Minden adat törlése'))),
+    h('p', { class: 'hint' }, 'Az adatok csak ebben a böngészőben tárolódnak, sehová nem töltődnek fel. Másik gépre vagy biztonsági mentéshez használd az exportot.'));
+}
+function replaceAll(d) {
+  S = d; save(); for (const k of Object.keys(layouts)) delete layouts[k];
+  titleInput.value = S.title; UI.child = UI.q = null; render();
+}
+function demo() {
+  const names = ['Balogh Dóra', 'Farkas Máté', 'Kiss Anna', 'Kovács Lili', 'Lakatos Zsófi', 'Molnár Ádám', 'Nagy Bence', 'Németh Hanna',
+    'Papp Dani', 'Szabó Levente', 'Takács Emma', 'Tóth Gergő', 'Varga Noel', 'Vass Luca'];
+  const d = blank(); d.title = 'Példa osztály';
+  d.children = names.map((name, i) => ({ id: i + 1, name }));
+  d.questions = [{ id: 1, text: 'Kivel ülnél szívesen egy padban?', category: 'rokonszenv', count: 3 },
+                 { id: 2, text: 'Kit választanál csapatkapitánynak?', category: 'vezetés', count: 2 }];
+  let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (const c of d.children.slice(0, -1)) for (const q of d.questions) {
+    const pick = new Set();
+    while (pick.size < q.count) { const t = 1 + Math.floor(Math.pow(rnd(), 1.8) * names.length); if (t !== c.id) pick.add(t); }
+    (d.answers[c.id] ??= {})[q.id] = [...pick];
+  }
+  d.answers[3][1].pop();
+  return d;
+}
+
+render();
+</script>
+</body>
+</html>
